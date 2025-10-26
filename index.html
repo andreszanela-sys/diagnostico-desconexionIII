@@ -250,7 +250,7 @@ function normalizePayload(payload){
 
 function buildChart(payload){
   const lang = (payload.lang === 'en') ? 'en' : 'es';
-  const { labels, proms } = normalizePayload(payload);
+  const { labels, proms, insights } = normalizePayload(payload);
 
   lastInsights = insights || {};
 
