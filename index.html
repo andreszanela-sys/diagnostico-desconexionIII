@@ -186,7 +186,9 @@ let lastInsights = {};
 
 function buildWhenReady(payload){
   lastPayload = payload;
-  lastInsights = payload.insights || {}; 
+  lastInsights  = (payload.insights && typeof payload.insights === 'object')
+    ? payload.insights
+    : {}; 
   const canvas = document.getElementById('heatbar');
 
   function tick(){
@@ -243,9 +245,11 @@ function normalizePayload(payload){
     ? payload.promedios.map(Number)
     : new Array(labels.length).fill(3);
 
-  const insights = payload.insights || {};
+  const insightsObj = payload.insights && typeof payload.insights === 'object'
+    ? payload.insights
+    : {};
 
-  return { labels, proms, insights };
+  return { labels, proms, insights: insightsObj };
 }
 
 function buildChart(payload){
