@@ -243,12 +243,16 @@ function normalizePayload(payload){
     ? payload.promedios.map(Number)
     : new Array(labels.length).fill(3);
 
-  return { labels, proms };
+  const insights = payload.insights || {};
+
+  return { labels, proms, insights };
 }
 
 function buildChart(payload){
   const lang = (payload.lang === 'en') ? 'en' : 'es';
   const { labels, proms } = normalizePayload(payload);
+
+  lastInsights = insights || {};
 
   // Título arriba
   document.getElementById('chartTitle').textContent =
