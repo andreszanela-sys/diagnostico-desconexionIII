@@ -1,0 +1,441 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Tensión humana / Desconexión</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1"></script>
+<style>
+  :root { color-scheme: light; }
+  html, body { height:100%; margin:0; }
+  body {
+    background:#fff;
+    font-family:Inter,system-ui,Arial,sans-serif;
+    color:#111;
+  }
+  .wrap{
+    box-sizing:border-box;
+    padding:10px 12px;
+    height:100%;
+    display:grid;
+    grid-template-rows:auto auto 1fr;
+    gap:8px;
+  }
+  h3{
+    margin:0;
+    font-size:16px;
+    font-weight:600;
+    color:#111;
+  }
+  .meta{
+    font-size:12px;
+    color:#444;
+    line-height:1.45;
+    white-space:pre-line;
+  }
+  #chartBox{
+    position:relative;
+    width:100%;
+    height:100%;
+  }
+  #heatbar{
+    width:100% !important;
+    height:100% !important;
+    display:block;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h3 id="chartTitle">Tensión humana por área</h3>
+  <div class="meta" id="chartMeta"></div>
+  <div id="chartBox">
+    <canvas id="heatbar"></canvas>
+  </div>
+</div>
+
+<script>
+// ================= ORIGEN SEGURO =================
+function originPermitido(origin){
+  try {
+    const h = new URL(origin).hostname;
+    return (
+      origin === 'https://innovacionregenerativa.com' ||
+      origin === 'https://www.innovacionregenerativa.com' ||
+      h.endsWith('.wixsite.com') ||
+      h.endsWith('.wix.com') ||
+      h === 'editor.wixapps.net'
+    );
+  } catch(_) {
+    return false;
+  }
+}
+
+// ================= ESCALA / SEMÁFORO =================
+// Semáforo según el promedio declarado por el usuario (1 = nada / 5 = totalmente aplicado)
+const COLORS = {
+  crisis:       '#EF4444', // rojo
+  desconectado: '#F97316', // naranja
+  transicion:   '#EAB308', // amarillo
+  regenerativa: '#22C55E'  // verde
+};
+
+const AREA_KEYS = [
+  'proposito',
+  'liderazgo',
+  'cultura',
+  'aprendizaje',
+  'procesos',
+  'sostenibilidad'
+];
+
+function urgFromScore(score, lang){
+  if (score <= 2.0) {
+    return {
+      key: 'crisis',
+      label: (lang==='en' ? 'In crisis' : 'En crisis'),
+      color: COLORS.crisis,
+      expl: (lang==='en'
+        ? 'Almost none of this is present. People experience high friction and uncertainty.'
+        : 'Casi nada de esto está presente. El equipo opera con mucha fricción e incertidumbre.')
+    };
+  }
+  if (score <= 3.0) {
+    return {
+      key: 'desconectado',
+      label: (lang==='en' ? 'Disconnected' : 'Desconectado'),
+      color: COLORS.desconectado,
+      expl: (lang==='en'
+        ? 'This shows up only sometimes or in isolated pockets.'
+        : 'Esto aparece solo a veces o en áreas aisladas.')
+    };
+  }
+  if (score <= 4.0) {
+    return {
+      key: 'transicion',
+      label: (lang==='en' ? 'In transition' : 'En transición'),
+      color: COLORS.transicion,
+      expl: (lang==='en'
+        ? 'It exists in a more regular and organized way, but is not yet systemic.'
+        : 'Existe de manera más regular y organizada, pero aún no es sistémico.')
+    };
+  }
+  return {
+    key: 'regenerativa',
+    label: (lang==='en' ? 'Regenerative' : 'Regenerativa'),
+    color: COLORS.regenerativa,
+    expl: (lang==='en'
+      ? 'This is fully integrated across the organization.'
+      : 'Esto está integrado de forma total en toda la organización.')
+  };
+}
+
+// ================= TEXTOS BASE =================
+function leadText(lang){
+  // Este texto conecta tu escala 1–5 con la idea de tensión humana
+  return (lang==='en')
+    ? 'How present is this in daily reality? Bars show “unmet capacity”. Higher bar = more human tension.'
+    : '¿Qué tanto está presente esto en la realidad diaria? Las barras muestran “capacidad no instalada”. Barra más alta = mayor tensión humana.';
+}
+
+// Ayudante visual: unir ["Propósito","y estrategia"] → "Propósito\ny estrategia"
+function normalizeLabels(rawLabels) {
+  return rawLabels.map(l => Array.isArray(l) ? l.join('\n') : String(l));
+}
+
+function fmtNum(n){
+  const x = Number(n);
+  return isNaN(x) ? '–' : x.toFixed(1);
+}
+
+// Meta arriba del gráfico, usando TU semántica de escala
+function buildMetaText(labels, proms, lang){
+  // Calculamos índice de tensión = 5 - promedio
+  const tensiones = proms.map(v => Math.max(0, 5 - v)); // 0..4
+  // Área con más tensión (barra más alta)
+  let idxMax = 0;
+  for (let i=1; i<tensiones.length; i++){
+    if (tensiones[i] > tensiones[idxMax]) idxMax = i;
+  }
+
+  const areaTop   = labels[idxMax].replace(/\n/g,' ');
+  const avgTop    = proms[idxMax];                   // 1..5 reportado por el usuario
+  const u         = urgFromScore(avgTop, lang);      // estado semáforo
+  const explLinea = u.expl;                          // explicación humana
+
+  if (lang === 'en') {
+    return (
+      `Highest tension in ${areaTop} (${fmtNum(avgTop)}/5 · ${u.label}).\n` +
+      `${explLinea}`
+    );
+  }
+
+  return (
+    `Mayor tensión en ${areaTop} (${fmtNum(avgTop)}/5 · ${u.label}).\n` +
+    `${explLinea}`
+  );
+}
+
+// ================= RESPONSIVE =================
+let chart;
+let lastPayload = null;
+let ro;
+let rafId = 0;
+let resizeTimer = 0;
+let lastInsights = {};
+
+function buildWhenReady(payload){
+  lastPayload = payload;
+  lastInsights = payload.insights || {}; 
+  const canvas = document.getElementById('heatbar');
+
+  function tick(){
+    const w = canvas.offsetWidth  || canvas.clientWidth  || 0;
+    const h = canvas.offsetHeight || canvas.clientHeight || 0;
+    if (w > 40 && h > 40) {
+      buildChart(payload);
+    } else {
+      requestAnimationFrame(tick);
+    }
+  }
+  tick();
+}
+
+function mountResizeObserver(){
+  try {
+    const el = document.querySelector('#chartBox');
+    if (!el) return;
+    ro?.disconnect?.();
+    ro = new ResizeObserver(() => {
+      cancelAnimationFrame(rafId);
+      clearTimeout(resizeTimer);
+      rafId = requestAnimationFrame(()=>{
+        resizeTimer = setTimeout(()=>{
+          if (chart) chart.resize();
+          else if (lastPayload) buildWhenReady(lastPayload);
+        }, 120);
+      });
+    });
+    ro.observe(el);
+  } catch(_) {}
+}
+document.addEventListener('DOMContentLoaded', mountResizeObserver);
+window.addEventListener('load', mountResizeObserver);
+
+// ================= BUILD CHART =================
+function normalizePayload(payload){
+  const FALLBACK_LABELS_ES = [
+    ['Propósito','y estrategia'],
+    ['Liderazgo','y gobernanza'],
+    ['Cultura','y bienestar'],
+    ['Aprendizaje','e innovación'],
+    ['Procesos','y tecnología'],
+    ['Sostenibilidad','e impacto']
+  ];
+
+  const rawLabels = (payload.labels && payload.labels.length)
+    ? payload.labels
+    : FALLBACK_LABELS_ES;
+
+  const labels = normalizeLabels(rawLabels);
+
+  const proms = Array.isArray(payload.promedios)
+    ? payload.promedios.map(Number)
+    : new Array(labels.length).fill(3);
+
+  return { labels, proms };
+}
+
+function buildChart(payload){
+  const lang = (payload.lang === 'en') ? 'en' : 'es';
+  const { labels, proms } = normalizePayload(payload);
+
+  // Título arriba
+  document.getElementById('chartTitle').textContent =
+    (lang === 'en'
+      ? 'Human tension by area'
+      : 'Tensión humana por área');
+
+  // Meta arriba (explicación y mayor punto de tensión)
+  const meta = leadText(lang) + '\n\n' + buildMetaText(labels, proms, lang);
+  document.getElementById('chartMeta').textContent = meta;
+
+  // Cálculo de la barra (tensión). Máx = 4 cuando el promedio = 1 (Nada en absoluto)
+  const tensiones = proms.map(v => Math.max(0, 5 - v)); // 0..4
+  // Color por barra según estado sistémico
+  const bgColors  = proms.map(v => urgFromScore(v, lang).color);
+
+  // Ajuste retina
+  Chart.defaults.devicePixelRatio = () => window.devicePixelRatio || 1;
+
+  if (chart) chart.destroy();
+  const ctx = document.getElementById('heatbar');
+
+  chart = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [{
+        label: (lang==='en'
+          ? 'Unmet capacity / human tension (0–4)'
+          : 'Capacidad no instalada / tensión humana (0–4)'),
+        data: tensiones,
+        borderRadius: 8,
+        backgroundColor: bgColors,
+        borderWidth: 0,
+        barThickness: 26,
+        maxBarThickness: 32
+      }]
+    },
+    options: {
+      indexAxis: 'y',
+      responsive: true,
+      maintainAspectRatio: false,
+      normalized: true,
+      layout: {
+        padding: { top: 6, right: 6, bottom: 6, left: 0 }
+      },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+                  label: (ctx) => {
+              const i   = ctx.dataIndex;
+              const avg = proms[i];          // 1..5
+              const u   = urgFromScore(avg, lang);
+              const disc = ctx.raw;          // 0..4 (tensión = 5 - avg)
+
+              if (lang === 'en') {
+                return [
+                  `Tension: ${disc.toFixed(1)} / 4`,
+                  `Reported presence: ${avg.toFixed(1)} / 5`,
+                  `Urgency: ${u.label}`
+                ];
+              } else {
+                return [
+                  `Tensión: ${disc.toFixed(1)} / 4`,
+                  `Presencia reportada: ${avg.toFixed(1)} / 5`,
+                  `Urgencia: ${u.label}`
+                ];
+              }
+            },
+
+            // aquí metemos la causa raíz elegida en la #6 de esa área 👇
+            afterLabel: (ctx) => {
+              const i = ctx.dataIndex;
+
+              // 1. obtenemos la clave de área según el índice de la barra
+              const areaKey = AREA_KEYS[i]; // 'liderazgo', 'cultura', etc
+
+              // 2. buscamos el texto que vino del formulario Wix
+              const causa = lastInsights[areaKey] || '';
+
+              // 3. si no hay respuesta para esa área (por ejemplo usuario no contestó la 6),
+              //    entonces mostramos el fallback que ya tenías
+              if (!causa) {
+                const avg = proms[i];
+                if (avg <= 3.0) {
+                  return (lang === 'en')
+                    ? 'Risk: trust erosion, turnover and rework.'
+                    : 'Riesgo: erosión de confianza, rotación y retrabajo.';
+                }
+                return (lang === 'en')
+                  ? 'Maintain rhythm so it doesn’t slip.'
+                  : 'Sostener la cadencia para que no retroceda.';
+              }
+
+              // 4. si sí hay causa raíz, la regresamos. Eso se agrega como línea extra del tooltip
+              //    Ej: "Comunicación más transparente."
+              return (lang === 'en')
+                ? `Root cause: ${causa}`
+                : `Causa raíz: ${causa}`;
+            }
+          }
+        }
+      },
+      scales: {
+        x: {
+          min: 0,
+          max: 4,
+          ticks: {
+            stepSize: 1,
+            color: '#111',
+            callback: (v) => v.toString()
+          },
+          grid: { color: '#e5e7eb' }
+        },
+        y: {
+          ticks: {
+            color: '#111',
+            font: { size: 11 },
+            callback: function(value, index){
+              const lbl = this.getLabelForValue(index) || '';
+              return lbl.split('\n'); // soporta multilínea
+            }
+          },
+          grid: { display: false }
+        }
+      },
+      animation: {
+        duration: 600,
+        easing: 'easeOutQuart'
+      }
+    }
+  });
+}
+
+// ================= HANDSHAKE CON VELO =================
+// Avisar a Wix que ya podemos recibir datos
+window.addEventListener('load', () => {
+  window.parent?.postMessage({ type:'ready', chart:'desconexion' }, '*');
+});
+
+// Recibir datos reales del sitio Wix
+window.addEventListener('message', (ev) => {
+  if (!originPermitido(ev.origin)) return;
+  const d = ev.data || {};
+
+  // ignorar mensajitos internos
+  if (d.type === 'ready' || d.type === 'pong') return;
+
+  // payload normal {type:'desconexion', lang, labels, promedios}
+  if (d && (d.type === 'desconexion' || Array.isArray(d.promedios))) {
+    buildWhenReady(d);
+    return;
+  }
+
+  // compat: si nos mandan solo un arreglo, lo tomamos como promedios
+  if (Array.isArray(d)) {
+    buildWhenReady({
+      lang: 'es',
+      labels: [
+        ['Propósito','y estrategia'],
+        ['Liderazgo','y gobernanza'],
+        ['Cultura','y bienestar'],
+        ['Aprendizaje','e innovación'],
+        ['Procesos','y tecnología'],
+        ['Sostenibilidad','e impacto']
+      ],
+      promedios: d,
+      insights: {}
+    });
+  }
+});
+
+// Render inicial placeholder (por si carga sin datos)
+buildWhenReady({
+  lang: 'es',
+  labels: [
+    ['Propósito','y estrategia'],
+    ['Liderazgo','y gobernanza'],
+    ['Cultura','y bienestar'],
+    ['Aprendizaje','e innovación'],
+    ['Procesos','y tecnología'],
+    ['Sostenibilidad','e impacto']
+  ],
+  promedios: [3,3,3,3,3,3],
+  insights: {}
+});
+</script>
+</body>
+</html>
