@@ -185,7 +185,7 @@ let resizeTimer = 0;
 let lastInsights = {};
 
 function buildWhenReady(payload){
-  lastPayload = payload;
+    lastPayload = payload;
   lastInsights  = (payload.insights && typeof payload.insights === 'object')
     ? payload.insights
     : {}; 
@@ -221,6 +221,76 @@ function mountResizeObserver(){
     ro.observe(el);
   } catch(_) {}
 }
+
+
+// === Fondo blanco al exportar (evita negro en PDF) ===
+const backgroundFillPlugin = {
+  id: 'backgroundFill',
+  beforeDraw(chart) {
+    const { ctx, width, height } = chart;
+    ctx.save();
+    ctx.globalCompositeOperation = 'destination-over';
+    ctx.fillStyle = '#FFFFFF';
+    ctx.fillRect(0, 0, width, height);
+    ctx.restore();
+  }
+};
+
+let backgroundFillRegistered = false;
+
+// === Exportar a JPEG (ligero y con fondo blanco) ===
+function getChartPNG() {
+  try {
+    if (window.chart && typeof window.chart.toBase64Image === 'function') {
+      const dataURL = window.chart.toBase64Image('image/jpeg', 0.92);
+      const w = window.chart?.canvas?.width  || 980;
+      const h = window.chart?.canvas?.height || 540;
+      return { dataURL, w, h, fmt: 'JPEG' };
+    }
+    const cv = document.getElementById('heatbar');
+    if (cv?.toDataURL) {
+      return { dataURL: cv.toDataURL('image/jpeg', 0.92), w: cv.width, h: cv.height, fmt:'JPEG' };
+    }
+    return { dataURL:null, w:0, h:0, fmt:'ERROR' };
+  } catch (e) {
+    return { dataURL:null, w:0, h:0, fmt:'ERROR' };
+  }
+}
+
+// === Avisar al padre que la imagen está lista ===
+function notifyDesconexionReady() {
+  const snap = getChartPNG();
+  console.log('[DESCONEXION] snapshot:', !!(snap&&snap.dataURL), snap?.fmt, snap?.w, snap?.h);
+  if (snap && snap.dataURL) {
+    window.parent?.postMessage({
+      type: 'desconexion-ready',
+      imagenes: {
+        desconexion:    snap.dataURL,
+        desconexionW:   snap.w,
+        desconexionH:   snap.h,
+        desconexionFmt: snap.fmt
+      }
+    }, '*');
+  } else {
+    setTimeout(() => {
+      const again = getChartPNG();
+      if (again && again.dataURL) {
+        window.parent?.postMessage({
+          type: 'desconexion-ready',
+          imagenes: {
+            desconexion:    again.dataURL,
+            desconexionW:   again.w,
+            desconexionH:   again.h,
+            desconexionFmt: again.fmt
+          }
+        }, '*');
+      }
+    }, 120);
+  }
+}
+
+
+
 document.addEventListener('DOMContentLoaded', mountResizeObserver);
 window.addEventListener('load', mountResizeObserver);
 
@@ -253,6 +323,7 @@ function normalizePayload(payload){
 }
 
 function buildChart(payload){
+    console.log('[DESCONEXION] buildChart payload:', payload);
   const lang = (payload.lang === 'en') ? 'en' : 'es';
   const { labels, proms, insights } = normalizePayload(payload);
 
@@ -275,6 +346,11 @@ function buildChart(payload){
 
   // Ajuste retina
   Chart.defaults.devicePixelRatio = () => window.devicePixelRatio || 1;
+
+  if (!backgroundFillRegistered) {
+  Chart.register(backgroundFillPlugin);
+  backgroundFillRegistered = true;
+  }
 
   if (chart) chart.destroy();
   const ctx = document.getElementById('heatbar');
@@ -390,6 +466,19 @@ function buildChart(payload){
       }
     }
   });
+
+  // Aviso al terminar de pintar (igual que en costos)
+    if (chart?.options?.animation) {
+    const prev = chart.options.animation.onComplete;
+    chart.options.animation.onComplete = (ctx) => {
+        try { prev?.(ctx); } catch(_) {}
+        notifyDesconexionReady();
+    };
+    } else {
+    requestAnimationFrame(() => notifyDesconexionReady());
+    }
+
+  
 }
 
 // ================= HANDSHAKE CON VELO =================
@@ -411,6 +500,12 @@ window.addEventListener('message', (ev) => {
     buildWhenReady(d);
     return;
   }
+
+    if (d?.type === 'snapshot' && (d.chart === 'desconexion')) {
+    const snap = getChartPNG();
+    window.parent?.postMessage({ type:'snapshot-ok', chart:'desconexion', ...snap }, '*');
+    return;
+    }
 
   // compat: si nos mandan solo un arreglo, lo tomamos como promedios
   if (Array.isArray(d)) {
